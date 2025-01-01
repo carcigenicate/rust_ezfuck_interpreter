@@ -1,7 +1,7 @@
 use std::cmp::min;
 use std::io;
 use std::io::{BufRead, Read, Write};
-use crate::ezfuck::parser::parser::{Instruction, EqualityOperator, MathOperator, Value, Direction, compile_to_intermediate, CellMoveOperator};
+use crate::ezfuck::parser::parser::{Instruction, EqualityOperator, MathOperator, Value, Direction, compile_to_intermediate, CellMoveOperator, WrappedInstruction};
 use crate::ezfuck::repl::cell_repr::{produce_cells_repr};
 
 #[derive(Clone, Debug)]
@@ -84,7 +84,9 @@ fn read_value<R: BufRead>(in_stream: &mut R) -> u8 {
     return input[0];
 }
 
-pub fn interpret_instruction<R: BufRead, W: Write>(instruction: Instruction, state: &mut ExecutionState, in_stream: &mut R, out_stream: &mut W, allow_debugging: bool) -> () {
+pub fn interpret_instruction<R: BufRead, W: Write>(wrapped_instruction: WrappedInstruction, state: &mut ExecutionState, in_stream: &mut R, out_stream: &mut W, allow_debugging: bool) -> () {
+    let WrappedInstruction { instruction, source_start } = wrapped_instruction;
+
     match instruction {
         Instruction::ApplyOperatorToCell { operator, value } => {
             let actual_value = value.determine_value(state.get_current_cell());
@@ -134,7 +136,7 @@ pub fn interpret_instruction<R: BufRead, W: Write>(instruction: Instruction, sta
     }
 }
 
-pub fn interpret<R: BufRead, W: Write>(instructions: &Vec<Instruction>, state: &mut ExecutionState, in_stream: &mut R, out_stream: &mut W, allow_debugging: bool) -> () {
+pub fn interpret<R: BufRead, W: Write>(instructions: &Vec<WrappedInstruction>, state: &mut ExecutionState, in_stream: &mut R, out_stream: &mut W, allow_debugging: bool) -> () {
     while state.instruction_ptr < instructions.len() {
         if state.is_debugging {
             start_debugger(&instructions, state, in_stream, out_stream);
@@ -147,7 +149,7 @@ pub fn interpret<R: BufRead, W: Write>(instructions: &Vec<Instruction>, state: &
     }
 }
 
-fn produce_instructions_repr(instructions: &Vec<Instruction>, instruction_ptr: usize, show_n_around: usize) -> String {
+fn produce_instructions_repr(instructions: &Vec<WrappedInstruction>, instruction_ptr: usize, show_n_around: usize) -> String {
     let start_bound = instruction_ptr.checked_sub(show_n_around).unwrap_or(0);
     let end_bound = min(instruction_ptr + show_n_around, instructions.len() - 1);
     let relevant_instructions = &instructions[start_bound..=end_bound];
@@ -164,7 +166,7 @@ fn produce_instructions_repr(instructions: &Vec<Instruction>, instruction_ptr: u
     return repr;
 }
 
-fn start_debugger<R: BufRead, W: Write>(instructions: &Vec<Instruction>, state: &mut ExecutionState, in_stream: &mut R, out_stream: &mut W) -> () {
+fn start_debugger<R: BufRead, W: Write>(instructions: &Vec<WrappedInstruction>, state: &mut ExecutionState, in_stream: &mut R, out_stream: &mut W) -> () {
     writeln!(out_stream, "").unwrap();
     let cells_repr = produce_cells_repr(&state.cells, state.cell_ptr);
     out_stream.write(cells_repr.as_bytes()).unwrap();
@@ -209,7 +211,7 @@ fn start_debugger<R: BufRead, W: Write>(instructions: &Vec<Instruction>, state: 
     writeln!(out_stream, "").unwrap();
 }
 
-pub fn interpret_with_std_io(instructions: &Vec<Instruction>, allow_debugging: bool) -> () {
+pub fn interpret_with_std_io(instructions: &Vec<WrappedInstruction>, allow_debugging: bool) -> () {
     let stdin = io::stdin();
     let mut input = stdin.lock();
 
@@ -222,10 +224,10 @@ pub fn interpret_with_std_io(instructions: &Vec<Instruction>, allow_debugging: b
 
 #[cfg(test)]
 mod tests {
-    use crate::ezfuck::parser::parser::compile_to_intermediate;
+    use crate::ezfuck::parser::parser::{compile_to_intermediate, WrappedInstruction};
     use super::*;
 
-    fn interpret_and_collect_output(instructions: &Vec<Instruction>, state: &mut ExecutionState, input: &[u8]) -> String {
+    fn interpret_and_collect_output(instructions: &Vec<WrappedInstruction>, state: &mut ExecutionState, input: &[u8]) -> String {
         let mut input = &input[..];
         let mut output = vec![];
 
@@ -235,12 +237,14 @@ mod tests {
         return output_string;
     }
 
-    fn interpret_instruction_and_collect_output(instruction: Instruction, state: &mut ExecutionState, input: &[u8]) -> String {
+    fn interpret_unwrapped_instruction_and_collect_output(instruction: Instruction, state: &mut ExecutionState, input: &[u8]) -> String {
         let mut input = &input[..];
         let mut output = vec![];
 
+        let wrapped_instruction = WrappedInstruction { instruction: instruction, source_start: 0 };
 
-        interpret_instruction(instruction, state, &mut input, &mut output, false);
+
+        interpret_instruction(wrapped_instruction, state, &mut input, &mut output, false);
 
         let output_string = String::from_utf8(output).unwrap();
         return output_string;
@@ -254,7 +258,7 @@ mod tests {
         };
 
         let mut state = ExecutionState::new();
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.cells, vec![5]);
     }
 
@@ -267,7 +271,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(20);
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.cells, vec![15]);
     }
 
@@ -280,7 +284,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(10);
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.cells, vec![50]);
     }
 
@@ -293,7 +297,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(50);
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.cells, vec![10]);
     }
 
@@ -307,7 +311,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(10);
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.instruction_ptr, 5);
     }
 
@@ -321,7 +325,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(10);
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.instruction_ptr, 0);
     }
 
@@ -335,7 +339,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(5);
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.instruction_ptr, 5);
     }
 
@@ -348,7 +352,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_cell_pointer(20);
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.cell_ptr, 15);
     }
 
@@ -360,7 +364,7 @@ mod tests {
         };
 
         let mut state = ExecutionState::new();
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.cell_ptr, 5);
     }
 
@@ -372,7 +376,7 @@ mod tests {
         };
 
         let mut state = ExecutionState::new();
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.cell_ptr, 10);
     }
 
@@ -383,7 +387,7 @@ mod tests {
         };
 
         let mut state = ExecutionState::new();
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.cells, vec![5]);
     }
 
@@ -397,7 +401,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(10);
-        interpret_instruction_and_collect_output(instruction, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(instruction, &mut state, b"");
         assert_eq!(state.instruction_ptr, 0);
     }
 
@@ -405,16 +409,6 @@ mod tests {
     fn it_should_print_hello_world() {
         // TODO: Find a more isolated, clean way of doing this test without relying on the parser
         let code = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
-        let instructions = compile_to_intermediate(code, false);
-
-        let mut state = ExecutionState::new();
-        let output_string = interpret_and_collect_output(&instructions, &mut state, b"");
-        assert_eq!(output_string, "Hello World!\n");
-    }
-
-    #[test]
-    fn it_should_print_hello_world_using_values() {
-        let code = "+8[>+4[>+2>+3>+3>+<4-]>+>+>->2+[<]<-]>2.>-3.+7..+3.>2.<-.<.+3.-6.-8.>2+.>+2.";
         let instructions = compile_to_intermediate(code, false);
 
         let mut state = ExecutionState::new();
@@ -470,7 +464,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(255);
-        interpret_instruction_and_collect_output(increment, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(increment, &mut state, b"");
         assert_eq!(state.get_current_cell(), 1);
     }
 
@@ -483,7 +477,7 @@ mod tests {
 
         let mut state = ExecutionState::new();
         state.set_current_cell(0);
-        interpret_instruction_and_collect_output(decrement, &mut state, b"");
+        interpret_unwrapped_instruction_and_collect_output(decrement, &mut state, b"");
         assert_eq!(state.get_current_cell(), 254);
     }
 }

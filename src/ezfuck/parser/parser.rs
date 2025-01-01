@@ -11,101 +11,153 @@ const NUMERIC_LITERAL_SYMBOLS: &str  = "1234567890";
 const CURRENT_CELL_SYMBOLS: &str  = "V";
 const VALUE_SYMBOLS: &str = "1234567890V";
 
-fn is_command_lexeme(lexeme: &String) -> bool {
-    let first_symbol = lexeme.chars().next().unwrap();
-    return lexeme.len() == 1 && COMMAND_SYMBOLS.contains(first_symbol);
+fn is_command_lexeme(lexeme: &Lexeme) -> bool {
+    let first_symbol = lexeme.symbols.chars().next().unwrap();
+    return lexeme.symbols.len() == 1 && COMMAND_SYMBOLS.contains(first_symbol);
 }
 
-fn is_numeric_literal_lexeme(lexeme: &String) -> bool {
-    let first_symbol = lexeme.chars().next().unwrap();
+fn is_numeric_literal_lexeme(lexeme: &Lexeme) -> bool {
+    let first_symbol = lexeme.symbols.chars().next().unwrap();
     return NUMERIC_LITERAL_SYMBOLS.contains(first_symbol);
 }
 
-fn is_current_cell_lexeme(lexeme: &String) -> bool {
-    let first_symbol = lexeme.chars().next().unwrap();
+fn is_current_cell_lexeme(lexeme: &Lexeme) -> bool {
+    let first_symbol = lexeme.symbols.chars().next().unwrap();
     return CURRENT_CELL_SYMBOLS.contains(first_symbol);
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct Lexeme {
+    start: usize,
+    symbols: String,
+}
+
 struct Scanner {
-    lexemes: Vec<String>,
-    partial_lexeme: String,
+    code: Vec<char>,
+    scan_i: usize,
+    lexemes: Vec<Lexeme>,
 }
 
 impl Scanner {
-    fn new() -> Self {
-        return Scanner {
+    pub fn new(code: Vec<char>) -> Self {
+        return Self {
+            code: code,
+            scan_i: 0,
             lexemes: vec![],
-            partial_lexeme: String::new(),
+        };
+    }
+
+    pub fn next_symbol(self: &Self) -> Option<char> {
+        return self.code.get(self.scan_i).map(| sym | *sym);
+    }
+
+    pub fn advance(self: &mut Self) {
+        self.scan_i += 1;
+    }
+
+    pub fn is_exhausted(self: &Self) -> bool {
+        return self.scan_i >= self.code.len();
+    }
+
+    pub fn next_is_command(self: &Self) -> bool {
+        return self.next_symbol().map_or(false, | next_sym | COMMAND_SYMBOLS.contains(next_sym));
+    }
+
+    pub fn next_is_numeric_literal(self: &Self) -> bool {
+        return self.next_symbol().map_or(false, | next_sym | NUMERIC_LITERAL_SYMBOLS.contains(next_sym));
+    }
+
+    pub fn next_is_current_cell(self: &Self) -> bool {
+        return self.next_symbol().map_or(false, | next_sym | CURRENT_CELL_SYMBOLS.contains(next_sym));
+    }
+    pub fn consume_single_symbol(self: &mut Self) -> () {
+        match self.next_symbol() {
+            Some(symbol) => {
+                let lexeme = Lexeme { start: self.scan_i, symbols: symbol.to_string() };
+                self.lexemes.push(lexeme);
+                self.advance();
+            }
+            None => {}
         }
     }
 
-    fn add_partial_as_lexeme(self: &mut Self) {
-        if self.partial_lexeme.is_empty() == false {
-            self.lexemes.push(self.partial_lexeme.clone());
-            self.partial_lexeme = String::new();
-        }
-    }
+    pub fn consume_integer_literal(self: &mut Self) -> () {
+        let start_i = self.scan_i;
 
-    fn add_lexeme(self: &mut Self, lexeme: String) {
-        if lexeme.is_empty() == false {
-            self.lexemes.push(lexeme);
+        let mut symbols = String::new();
+        loop {
+            match self.next_symbol() {
+                Some(chr) => {
+                    if NUMERIC_LITERAL_SYMBOLS.contains(chr) {
+                        symbols.push(chr);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                None => {
+                    break;
+                }
+            }
         }
-    }
 
-    fn add_to_partial_lexeme(self: &mut Self, chr: char) {
-        self.partial_lexeme.push(chr);
+        let lexeme = Lexeme { start: start_i, symbols: symbols.to_string() };
+        self.lexemes.push(lexeme);
     }
 }
 
-fn scan_code(code: &Vec<char>) -> Vec<String> {
-    let mut scanner = Scanner::new();
+fn scan_code(code: &Vec<char>) -> Vec<Lexeme> {
+    let mut scanner = Scanner::new(code.clone());
 
-    let mut last_chr = ' ';
-    for chr in code {
-        // These two lexemes can only ever be a single character long
-        if COMMAND_SYMBOLS.contains(*chr) || CURRENT_CELL_SYMBOLS.contains(*chr) {
-            scanner.add_partial_as_lexeme();
-            scanner.add_lexeme(chr.to_string());
-        } else if NUMERIC_LITERAL_SYMBOLS.contains(*chr) {
-            if NUMERIC_LITERAL_SYMBOLS.contains(last_chr) == false {
-                scanner.add_partial_as_lexeme();
-            }
-
-            scanner.add_to_partial_lexeme(*chr);
+    while scanner.is_exhausted() == false {
+        if scanner.next_is_command() || scanner.next_is_current_cell() {
+            scanner.consume_single_symbol();
+        } else if scanner.next_is_numeric_literal() {
+            scanner.consume_integer_literal();
+        } else {
+            scanner.advance();
         }
-
-        last_chr = *chr;
     }
-
-    scanner.add_partial_as_lexeme();
 
     return scanner.lexemes;
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum Token {
+enum TokenKind {
     Command { value: char },
     IntegerLiteral { value: u8 },  // TODO: How big of integer?
     CurrentCellReference,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct Token {
+    kind: TokenKind,
+    source_start: usize,
+}
+
 impl Token {
-    pub fn from_lexeme(lexeme: String) -> Self {
+    fn from_parts(kind: TokenKind, source_start: usize) -> Self {
+        return Self {
+            kind: kind,
+            source_start: source_start
+        };
+    }
+    pub fn from_lexeme(lexeme: Lexeme) -> Self {
         if is_command_lexeme(&lexeme) {
-            let first_char = lexeme.chars().next().unwrap();
-            return Token::Command { value: first_char };
+            let first_char = lexeme.symbols.chars().next().unwrap();
+            return Token::from_parts(TokenKind::Command { value: first_char }, lexeme.start);
         } else if is_numeric_literal_lexeme(&lexeme) {
-            let parsed: u8 = lexeme.parse().expect(format!("Could not parse {lexeme} as integer literal").as_str());
-            return Token::IntegerLiteral { value: parsed };
+            let parsed: u8 = lexeme.symbols.parse().expect(format!("Could not parse {} as integer literal", lexeme.symbols).as_str());
+            return Token::from_parts(TokenKind::IntegerLiteral { value: parsed }, lexeme.start);
         } else if is_current_cell_lexeme(&lexeme) {
-            return Token::CurrentCellReference;
+            return Token::from_parts(TokenKind::CurrentCellReference, lexeme.start);
         } else {
-            panic!("Unknown lexeme: {lexeme}");
+            panic!("Unknown lexeme: {}", lexeme.symbols);
         }
     }
 }
 
-fn evaluate_lexemes(lexemes: Vec<String>) -> Vec<Token> {
+fn evaluate_lexemes(lexemes: Vec<Lexeme>) -> Vec<Token> {
     let mut tokens: Vec<Token> = vec![];
     for lexeme in lexemes {
         let token = Token::from_lexeme(lexeme);
@@ -134,6 +186,7 @@ impl Value {
 struct Command {
     symbol: char,
     value: Option<Value>,
+    source_start: usize,
 }
 
 impl Command {
@@ -148,32 +201,35 @@ impl Command {
 
 fn parse_tokens(tokens: Vec<Token>) -> Vec<Command> {
     let mut commands: Vec<Command> = vec![];
-    let mut command_symbol: Option<char> = None;
-    for token in tokens {
-        match token {
-            Token::Command { value } => {
-                if let Some(existing_symbol) = command_symbol {
-                    commands.push(Command { symbol: existing_symbol, value: None });
+    let mut command: Option<Command> = None;
+    let mut last_source_start = 0;
+    for Token { kind, source_start} in tokens {
+        match kind {
+            TokenKind::Command { value } => {
+                if let Some(existing_command) = command {
+                    commands.push(existing_command);
                 }
 
-                command_symbol = Some(value);
+                command = Some(Command { symbol: value, value: None, source_start: source_start });
             }
-            Token::IntegerLiteral { value } => {
-                match command_symbol {
-                    Some(symbol) => {
-                        commands.push(Command { symbol: symbol, value: Some(Value::Number(value)) });
-                        command_symbol = None;
+            TokenKind::IntegerLiteral { value } => {
+                match command {
+                    Some(mut existing_command) => {
+                        existing_command.value = Some(Value::Number(value));
+                        commands.push(existing_command);
+                        command = None;
                     }
                     None => {
                         panic!("Integer literal {value} must come after a command.")
                     }
                 }
             }
-            Token::CurrentCellReference => {
-                match command_symbol {
-                    Some(symbol) => {
-                        commands.push(Command { symbol: symbol, value: Some(Value::CurrentCell) });
-                        command_symbol = None;  // TODO: How to prevent all this duplication?
+            TokenKind::CurrentCellReference => {
+                match command {
+                    Some(mut existing_command) => {
+                        existing_command.value = Some(Value::CurrentCell);
+                        commands.push(existing_command);
+                        command = None;
                     }
                     None => {
                         panic!("\"V\" must come after a command.")
@@ -181,10 +237,12 @@ fn parse_tokens(tokens: Vec<Token>) -> Vec<Command> {
                 }
             }
         }
+
+        last_source_start = source_start;
     }
 
-    if let Some(command_symbol) = command_symbol {
-        commands.push(Command { symbol: command_symbol, value: None });
+    if let Some(existing_command) = command {
+        commands.push(existing_command);
     }
 
     return commands;
@@ -228,21 +286,11 @@ pub enum Instruction {
     Breakpoint,
 }
 
-// impl Display for Instruction {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-//         let output = match self {
-//             Instruction::ApplyOperatorToCell { operator, value } => format!("Cell <{operator}> {value}"),
-//             Instruction::ApplyOperatorToCellPtr { operator, value } => format!("Move slots by {offset} {direction}"),
-//             Instruction::JumpToIf { position, operator, match_value } => format!("Jump to {position} when value {operator} {match_value}"),
-//             Instruction::PrintOut => "Print".to_string(),
-//             Instruction::ReadIn => "Read".to_string(),
-//             Instruction::SetCell { value} => format!("Set Cell to {value}"),
-//             Instruction::Breakpoint => "Breakpoint".to_string(),
-//         };
-//
-//         return write!(f, "{}", output);
-//     }
-// }
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct WrappedInstruction {
+    pub instruction: Instruction,
+    pub source_start: usize,
+}
 
 fn find_loop_indices(commands: &Vec<Command>) -> (HashMap<usize, usize>, HashMap<usize, usize>) {
     let mut start_to_end: HashMap<usize, usize> = HashMap::new();
@@ -278,8 +326,8 @@ fn assert_valueless(command: Command) {
     }
 }
 
-fn compile_commands_to_intermediate(commands: Vec<Command>, allow_debugging: bool) -> Vec<Instruction> {
-    let mut instructions = Vec::new();
+fn compile_commands_to_intermediate(commands: Vec<Command>, allow_debugging: bool) -> Vec<WrappedInstruction> {
+    let mut instructions: Vec<WrappedInstruction> = Vec::new();
 
     let (start_to_end, end_to_start) = find_loop_indices(&commands);
     for (i, command) in commands.iter().enumerate() {
@@ -312,7 +360,10 @@ fn compile_commands_to_intermediate(commands: Vec<Command>, allow_debugging: boo
         };
 
         match instruction {
-            Some(inst) => instructions.push(inst),
+            Some(inst) => {
+                let wrapped_instruction = WrappedInstruction { instruction: inst, source_start: command.source_start };
+                instructions.push(wrapped_instruction)
+            },
             None => (),
         }
     }
@@ -320,7 +371,7 @@ fn compile_commands_to_intermediate(commands: Vec<Command>, allow_debugging: boo
     return instructions;
 }
 
-pub fn compile_to_intermediate(code: &str, allow_debugging: bool) -> Vec<Instruction> {
+pub fn compile_to_intermediate(code: &str, allow_debugging: bool) -> Vec<WrappedInstruction> {
     let code_vec: Vec<char> = code.chars().collect();
     let lexemes = scan_code(&code_vec);
     let tokens = evaluate_lexemes(lexemes);
@@ -336,10 +387,18 @@ mod tests {
 
         #[test]
         fn it_should_produce_the_correct_lexemes() {
-            let code = vec!['+', ' ', 'V', '1', '+', '2', '3', '+', '4', ' '];
+            let code = vec!['+', ' ', 'V', '1', '+', '2', '3', '+', '4', ' ', 'F'];
             let lexemes = scan_code(&code);
 
-            assert_eq!(lexemes, vec!["+", "V", "1", "+", "23", "+", "4"]);
+            assert_eq!(lexemes, vec![
+                Lexeme { start: 0, symbols: String::from("+") },
+                Lexeme { start: 2, symbols: String::from("V") },
+                Lexeme { start: 3, symbols: String::from("1") },
+                Lexeme { start: 4, symbols: String::from("+") },
+                Lexeme { start: 5, symbols: String::from("23") },
+                Lexeme { start: 7, symbols: String::from("+") },
+                Lexeme { start: 8, symbols: String::from("4") },
+            ]);
         }
 
         #[test]
@@ -347,7 +406,12 @@ mod tests {
             let code = vec!['+', '+', '-', '-'];
             let lexemes = scan_code(&code);
 
-            assert_eq!(lexemes, vec!["+", "+", "-", "-"]);
+            assert_eq!(lexemes, vec![
+                Lexeme { start: 0, symbols: String::from("+") },
+                Lexeme { start: 1, symbols: String::from("+") },
+                Lexeme { start: 2, symbols: String::from("-") },
+                Lexeme { start: 3, symbols: String::from("-") },
+            ]);
         }
     }
 
@@ -357,20 +421,27 @@ mod tests {
         #[test]
         fn it_should_produce_the_correct_tokens() {
             let lexemes = vec![String::from("+"), String::from("123"), String::from("-"), String::from("V")];
+            let lexemes = vec![
+                Lexeme { start: 0, symbols: String::from("+") },
+                Lexeme { start: 1, symbols: String::from("123") },
+                Lexeme { start: 4, symbols: String::from("-") },
+                Lexeme { start: 5, symbols: String::from("V") },
+            ];
+
             let tokens = evaluate_lexemes(lexemes);
 
             assert_eq!(tokens, vec![
-                Token::Command { value: '+' },
-                Token::IntegerLiteral { value: 123 },
-                Token::Command { value: '-' },
-                Token::CurrentCellReference,
+                Token::from_parts(TokenKind::Command { value: '+' }, 0),
+                Token::from_parts(TokenKind::IntegerLiteral { value: 123 }, 1),
+                Token::from_parts(TokenKind::Command { value: '-' }, 4),
+                Token::from_parts(TokenKind::CurrentCellReference, 5),
             ]);
         }
 
         #[test]
         #[should_panic]
         fn it_should_panic_if_an_unknown_lexeme_is_passed() {
-            let lexemes = vec![String::from("|")];
+            let lexemes = vec![Lexeme { start: 0, symbols: String::from("|") }];
             evaluate_lexemes(lexemes);
         }
     }
@@ -381,18 +452,18 @@ mod tests {
         #[test]
         fn it_should_produce_the_correct_commands() {
             let tokens = vec![
-                Token::Command { value: '+' },
-                Token::Command { value: '+' },
-                Token::IntegerLiteral { value: 123 },
-                Token::Command { value: '-' },
-                Token::CurrentCellReference,
+                Token::from_parts(TokenKind::Command { value: '+' }, 0),
+                Token::from_parts(TokenKind::Command { value: '+' }, 1),
+                Token::from_parts(TokenKind::IntegerLiteral { value: 123 }, 2),
+                Token::from_parts(TokenKind::Command { value: '-' }, 5),
+                Token::from_parts(TokenKind::CurrentCellReference, 6),
             ];
             let commands = parse_tokens(tokens);
 
             assert_eq!(commands, vec![
-                Command { symbol: '+', value: None },
-                Command { symbol: '+', value: Some(Value::Number(123)) },
-                Command { symbol: '-', value: Some(Value::CurrentCell) },
+                Command { symbol: '+', value: None, source_start: 0 },
+                Command { symbol: '+', value: Some(Value::Number(123)), source_start: 1 },
+                Command { symbol: '-', value: Some(Value::CurrentCell), source_start: 5 },
             ]);
         }
     }
@@ -403,7 +474,8 @@ mod tests {
         #[test]
         fn it_should_ignore_invalid_characters() {
             let code = "+None of this should be considered*";
-            let instructions = compile_to_intermediate(code, false);
+            let wrapped_instructions = compile_to_intermediate(code, false);
+            let instructions: Vec<Instruction> = wrapped_instructions.iter().map(|instruction| instruction.instruction).collect();
 
             assert_eq!(instructions.len(), 2);
 
@@ -414,7 +486,8 @@ mod tests {
         #[test]
         fn it_should_produce_the_correct_instruction_for_each_token() {
             let code = "[]+-*/<>@.,^";
-            let instructions = compile_to_intermediate(code, false);
+            let wrapped_instructions = compile_to_intermediate(code, false);
+            let instructions: Vec<Instruction> = wrapped_instructions.iter().map(|instruction| instruction.instruction).collect();
 
             assert_eq!(instructions.len(), 12);
 
@@ -435,7 +508,8 @@ mod tests {
         #[test]
         fn it_should_properly_read_instruction_values_and_default_missing_ones_to_one() {
             let code = "++1+2+3+40+200";
-            let instructions = compile_to_intermediate(code, false);
+            let wrapped_instructions = compile_to_intermediate(code, false);
+            let instructions: Vec<Instruction> = wrapped_instructions.iter().map(|instruction| instruction.instruction).collect();
 
             assert_eq!(instructions.len(), 6);
 
@@ -450,7 +524,8 @@ mod tests {
         #[test]
         fn it_should_properly_add_insertion_values() {
             let code = "+V";
-            let instructions = compile_to_intermediate(code, false);
+            let wrapped_instructions = compile_to_intermediate(code, false);
+            let instructions: Vec<Instruction> = wrapped_instructions.iter().map(|instruction| instruction.instruction).collect();
 
             assert_eq!(instructions.len(), 1);
             assert_eq!(instructions[0], Instruction::ApplyOperatorToCell { operator: MathOperator::Addition, value: Value::CurrentCell });
